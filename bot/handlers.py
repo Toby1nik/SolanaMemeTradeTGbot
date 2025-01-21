@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import StateFilter
 from bot.states import BuyState
+from bot.transaction import TransactionManager
 
 
 router = Router()
@@ -227,6 +228,7 @@ async def handle_sol_amount(message: Message, state: FSMContext):
         await message.answer("Please enter a valid number (e.g., 0.123).")
 
 
+# ----------------- Button: Confirm and send transaction -----------------
 @router.message(lambda msg: msg.text == "Confirm and send transaction", StateFilter(BuyState.waiting_for_confirmation))
 async def confirm_transaction(message: Message, state: FSMContext):
     try:
@@ -246,18 +248,38 @@ async def confirm_transaction(message: Message, state: FSMContext):
             await message.answer("You are back to the main menu.", reply_markup=main_menu())
             return
 
-        # TODO: Integrate with JupiterAPI to send the transaction and get the response
-        # Example: response = await jupiter_api.send_transaction(token_address, sol_amount)
+        user_id = message.from_user.id
 
-        # Placeholder success message
+        # Perform the swap using TransactionManager
+        swap_result = TransactionManager.swap(
+            user_id=user_id,
+            input_mint="So11111111111111111111111111111111111111112",  # SOL mint
+            output_mint=token_address,
+            amount_lamports=int(sol_amount * 1e9),
+            slippage_bps=10  # 1% slippage
+        )
+
+        if not swap_result:
+            await message.answer("❌ Transaction failed. Please try again.")
+            await state.clear()
+            return
+
+        # Extract transaction details
+        tx_signature = swap_result["transaction_signature"]
+        amount_sent = swap_result["amount_sent"]
+        amount_received = swap_result["amount_received"]
+
+        # Send confirmation to user
         await message.answer(
-            "✅ Your transaction has been successfully sent!\n\n"
-            f"🔹 Token Address: `{token_address}`\n"
-            f"🔹 Amount: {sol_amount} SOL\n\n"
-            "You can check the status of your transaction in your wallet.",
+            f"✅ Transaction successful!\n\n"
+            f"🔹 Amount sent: {amount_sent} SOL\n"
+            f"🔹 Amount received: {amount_received} tokens\n"
+            f"🔹 Transaction signature: `{tx_signature}`\n\n"
+            "You can check the status of your transaction on the Solana Explorer.",
             parse_mode="Markdown"
         )
-        logger.info("Transaction successfully confirmed.")
+
+        logger.info(f"Transaction confirmed: {tx_signature}")
 
         # Clear the state and return to the main menu
         await state.clear()

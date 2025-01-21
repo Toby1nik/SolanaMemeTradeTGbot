@@ -27,3 +27,36 @@ def get_estimated_amount(input_mint, output_mint, amount_in_sol):
         return amount_out
     except Exception as e:
         raise ValueError(f"Failed to fetch quote: {e}")
+
+def get_swap_transaction(input_mint, output_mint, amount, user_wallet, slippage_bps=10):
+    """
+    Get transaction details for a swap from Jupiter API.
+
+    Args:
+        input_mint (str): Mint address of the input token.
+        output_mint (str): Mint address of the output token.
+        amount (int): Amount of input tokens (in lamports).
+        user_wallet (str): Wallet address of the user.
+        slippage_bps (int): Slippage tolerance in basis points (default: 10).
+
+    Returns:
+        dict: Response from Jupiter API containing the swap transaction.
+    """
+    url = "https://quote-api.jup.ag/v6/swap"
+    payload = {
+        "inputMint": input_mint,
+        "outputMint": output_mint,
+        "amount": amount,
+        "slippageBps": slippage_bps,
+        "userPublicKey": user_wallet,
+        "swapMode": "ExactIn",
+    }
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        raise ValueError(f"Failed to fetch swap transaction: {e}")
+
