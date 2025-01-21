@@ -2,12 +2,12 @@ import logging
 from aiogram import Router, types
 from aiogram.filters import Command
 from bot.auth_manager import check_authorized_user
-from bot.utils import  fetch_token_decimals
+from bot.utils import fetch_token_decimals
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import StateFilter
 from bot.states import BuyState
-
+from bot.transaction import TransactionManager
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -21,10 +21,6 @@ from bot.wallet_manager import (
     update_user_balances,
     get_user_balances,
     generate_public_key_from_private_key
-)
-
-from bot.jupiter_api import (
-    get_estimated_amount
 )
 
 # Main menu
@@ -162,53 +158,38 @@ async def handle_token_address(message: Message, state: FSMContext):
 async def handle_sol_amount(message: Message, state: FSMContext):
     sol_amount_text = message.text.replace(",", ".").strip()
     try:
-        # Log the input
-        logger.info(f"Received sol_amount_text: {sol_amount_text}")
-
         if sol_amount_text.startswith("0") and not "." in sol_amount_text:
             sol_amount_text = f"0.{sol_amount_text[1:]}"
             logger.info(f"Adjusted sol_amount_text with leading zero: {sol_amount_text}")
 
-        # Convert to float
+            # Convert to float
         sol_amount = float(sol_amount_text)
         logger.info(f"Converted sol_amount: {sol_amount}")
 
         if sol_amount <= 0:
-            logger.warning(f"Invalid sol_amount (<= 0): {sol_amount}")
             await message.answer("Amount must be positive.")
             return
 
-        # Save sol_amount in state
         await state.update_data(sol_amount=sol_amount)
         data = await state.get_data()
-        logger.info(f"Saved FSM data: {data}")
         token_address = data.get("token_address")
-        # Fetch decimals for the token dynamically
-        try:
-            decimals = fetch_token_decimals(token_address)
-        except ValueError as e:
-            logger.error(e)
-            await message.answer("Failed to fetch token details. Please try again later.")
-            return
-        # Prepare response
-        try:
-            estimated_amount = get_estimated_amount(
-                input_mint="So11111111111111111111111111111111111111112",  # SOL mint address
-                output_mint=token_address,
-                amount_in_sol=sol_amount,
-            )
-            # Adjust estimated amount by decimals
-            logger.info(f'Success get estimate amount {estimated_amount} aka {estimated_amount / (10**decimals)}')
-            amount_out_decimal = estimated_amount / (10**decimals)
-        except ValueError as e:
-            logger.error(f"Error fetching estimated amount: {e}")
+
+        estimated_amount = TransactionManager.get_quote(
+            input_mint="So11111111111111111111111111111111111111112",
+            output_mint=token_address,
+            amount=int(sol_amount * 1e9),
+            slippage_bps=500,
+        )
+
+        if not estimated_amount:
             await message.answer("Failed to fetch a quote. Please try again later.")
             return
 
-        # Send the response to the user
+        output_amount = int(estimated_amount["outAmount"]) / (10 ** int(fetch_token_decimals(token_address)))
+
         await message.answer(
             f"You want to sell {sol_amount} SOL for the token:\n`{token_address}`\n"
-            f"Approximate result: {amount_out_decimal} tokens (adjusted for decimals).\n\n"
+            f"Approximate result: {output_amount} tokens.\n\n"
             "Click 'Back' to change the amount or 'Confirm' to proceed.",
             reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="Back")], [KeyboardButton(text="Confirm and send transaction")]],
@@ -218,48 +199,41 @@ async def handle_sol_amount(message: Message, state: FSMContext):
             parse_mode="Markdown"
         )
 
-        # Update FSM state for confirmation
         await state.set_state(BuyState.waiting_for_confirmation)
-        logger.info("FSM state updated to waiting_for_confirmation")
 
-    except ValueError as e:
-        logger.error(f"Error converting sol_amount_text to float: {sol_amount_text}. Error: {e}")
+    except ValueError:
         await message.answer("Please enter a valid number (e.g., 0.123).")
-
 
 @router.message(lambda msg: msg.text == "Confirm and send transaction", StateFilter(BuyState.waiting_for_confirmation))
 async def confirm_transaction(message: Message, state: FSMContext):
     try:
-        # Retrieve user data from FSM
         data = await state.get_data()
         token_address = data.get("token_address")
         sol_amount = data.get("sol_amount")
 
-        # Log retrieved data
-        logger.info(f"Confirm Transaction - FSM data: {data}")
-
-        # Validate data
         if not token_address or sol_amount is None:
-            logger.warning(f"Incomplete transaction data. Token Address: {token_address}, SOL Amount: {sol_amount}")
             await message.answer("Transaction data is incomplete. Please start again.")
             await state.clear()
             await message.answer("You are back to the main menu.", reply_markup=main_menu())
             return
 
-        # TODO: Integrate with JupiterAPI to send the transaction and get the response
-        # Example: response = await jupiter_api.send_transaction(token_address, sol_amount)
-
-        # Placeholder success message
-        await message.answer(
-            "✅ Your transaction has been successfully sent!\n\n"
-            f"🔹 Token Address: `{token_address}`\n"
-            f"🔹 Amount: {sol_amount} SOL\n\n"
-            "You can check the status of your transaction in your wallet.",
-            parse_mode="Markdown"
+        success = TransactionManager.buy(
+            user_id=message.from_user.id,
+            token_address=token_address,
+            sol_amount=sol_amount,
         )
-        logger.info("Transaction successfully confirmed.")
 
-        # Clear the state and return to the main menu
+        if success:
+            await message.answer(
+                "✅ Your transaction has been successfully sent!\n\n"
+                f"🔹 Token Address: `{token_address}`\n"
+                f"🔹 Amount: {sol_amount} SOL\n\n"
+                "You can check the status of your transaction in your wallet.",
+                parse_mode="Markdown"
+            )
+        else:
+            await message.answer("❌ Transaction failed. Please try again later.")
+
         await state.clear()
         await message.answer("You are back to the main menu.", reply_markup=main_menu())
 
