@@ -3,7 +3,7 @@
 **To run code:**
 
 ```
-cd new_scroll
+cd SolanaMemeTradeTGbot
 ```
 ```
 python3.12 -m venv venv
