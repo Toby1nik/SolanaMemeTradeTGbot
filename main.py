@@ -1,10 +1,12 @@
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
+from utils.setup import ensure_directories_and_files_exist
 from bot.handlers import router
 import asyncio
 import json
 import logging
 import os
+import sys
 
 # Setup logging
 LOG_DIR = "logs"
@@ -17,12 +19,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())  # Also output logs to console
 
+# Ensure directories and files exist
+ensure_directories_and_files_exist()
+
 # Load settings
-with open("data/settings.json", "r") as f:
-    config = json.load(f)
+try:
+    with open("data/settings.json", "r") as f:
+        config = json.load(f)
+except FileNotFoundError:
+    logger.error("Settings file not found! Please ensure 'data/settings.json' exists.")
+    sys.exit(1)
+
+# Validate Telegram token
+if not config.get("telegram_token"):
+    print('')
+    logger.error("Telegram token is missing in 'data/settings.json'. Please fill it and restart the bot.")
+    print('')
+    sys.exit(1)
 
 # Initialize bot
-bot = Bot(token=config["telegram_token"])
+try:
+    bot = Bot(token=config["telegram_token"])
+except Exception as e:
+    logger.error(f"Failed to initialize bot: {e}")
+    sys.exit(1)
+
 dp = Dispatcher()
 
 # Register routes
