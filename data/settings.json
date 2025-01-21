@@ -1,0 +1,5 @@
+{
+    "telegram_token": "",
+    "allowed_users": [],
+    "solana_rpc_url": "https://api.mainnet-beta.solana.com"
+}
