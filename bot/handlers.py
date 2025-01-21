@@ -1,9 +1,8 @@
 import logging
 from aiogram import Router, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from bot.auth_manager import check_authorized_user
-from bot.utils import  get_token_decimals
+from bot.utils import  fetch_token_decimals
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import StateFilter
@@ -184,16 +183,13 @@ async def handle_sol_amount(message: Message, state: FSMContext):
         data = await state.get_data()
         logger.info(f"Saved FSM data: {data}")
         token_address = data.get("token_address")
-        user_id = message.from_user.id  # Get the Telegram user ID
-
-        # Get decimals for the token
+        # Fetch decimals for the token dynamically
         try:
-            decimals = get_token_decimals(user_id, token_address)
+            decimals = fetch_token_decimals(token_address)
         except ValueError as e:
             logger.error(e)
             await message.answer("Failed to fetch token details. Please try again later.")
             return
-
         # Prepare response
         try:
             estimated_amount = get_estimated_amount(
@@ -202,7 +198,8 @@ async def handle_sol_amount(message: Message, state: FSMContext):
                 amount_in_sol=sol_amount,
             )
             # Adjust estimated amount by decimals
-            amount_out_decimal = estimated_amount / decimals
+            logger.info(f'Success get estimate amount {estimated_amount} aka {estimated_amount / (10**decimals)}')
+            amount_out_decimal = estimated_amount / (10**decimals)
         except ValueError as e:
             logger.error(f"Error fetching estimated amount: {e}")
             await message.answer("Failed to fetch a quote. Please try again later.")
@@ -228,7 +225,6 @@ async def handle_sol_amount(message: Message, state: FSMContext):
     except ValueError as e:
         logger.error(f"Error converting sol_amount_text to float: {sol_amount_text}. Error: {e}")
         await message.answer("Please enter a valid number (e.g., 0.123).")
-
 
 
 @router.message(lambda msg: msg.text == "Confirm and send transaction", StateFilter(BuyState.waiting_for_confirmation))
@@ -271,4 +267,3 @@ async def confirm_transaction(message: Message, state: FSMContext):
         logger.error(f"Unexpected error in confirm_transaction: {e}")
         await message.answer("An unexpected error occurred. Please try again later.")
         await state.clear()
-
