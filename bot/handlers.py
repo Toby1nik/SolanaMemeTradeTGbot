@@ -3,11 +3,12 @@ from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from bot.auth_manager import check_authorized_user
-
+from bot.utils import  get_token_decimals
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import StateFilter
 from bot.states import BuyState
+
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -21,6 +22,10 @@ from bot.wallet_manager import (
     update_user_balances,
     get_user_balances,
     generate_public_key_from_private_key
+)
+
+from bot.jupiter_api import (
+    get_estimated_amount
 )
 
 # Main menu
@@ -169,7 +174,6 @@ async def handle_sol_amount(message: Message, state: FSMContext):
         sol_amount = float(sol_amount_text)
         logger.info(f"Converted sol_amount: {sol_amount}")
 
-
         if sol_amount <= 0:
             logger.warning(f"Invalid sol_amount (<= 0): {sol_amount}")
             await message.answer("Amount must be positive.")
@@ -179,13 +183,35 @@ async def handle_sol_amount(message: Message, state: FSMContext):
         await state.update_data(sol_amount=sol_amount)
         data = await state.get_data()
         logger.info(f"Saved FSM data: {data}")
+        token_address = data.get("token_address")
+        user_id = message.from_user.id  # Get the Telegram user ID
+
+        # Get decimals for the token
+        try:
+            decimals = get_token_decimals(user_id, token_address)
+        except ValueError as e:
+            logger.error(e)
+            await message.answer("Failed to fetch token details. Please try again later.")
+            return
 
         # Prepare response
-        token_address = data.get("token_address")
-        result = sol_amount * 255  # Example calculation
+        try:
+            estimated_amount = get_estimated_amount(
+                input_mint="So11111111111111111111111111111111111111112",  # SOL mint address
+                output_mint=token_address,
+                amount_in_sol=sol_amount,
+            )
+            # Adjust estimated amount by decimals
+            amount_out_decimal = estimated_amount / decimals
+        except ValueError as e:
+            logger.error(f"Error fetching estimated amount: {e}")
+            await message.answer("Failed to fetch a quote. Please try again later.")
+            return
+
+        # Send the response to the user
         await message.answer(
-            f"You want to sell {sol_amount:.5f} SOL for the token:\n`{token_address}`\n"
-            f"Approximate result: {result:.5f} tokens.\n\n"
+            f"You want to sell {sol_amount} SOL for the token:\n`{token_address}`\n"
+            f"Approximate result: {amount_out_decimal} tokens (adjusted for decimals).\n\n"
             "Click 'Back' to change the amount or 'Confirm' to proceed.",
             reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="Back")], [KeyboardButton(text="Confirm and send transaction")]],
@@ -202,6 +228,7 @@ async def handle_sol_amount(message: Message, state: FSMContext):
     except ValueError as e:
         logger.error(f"Error converting sol_amount_text to float: {sol_amount_text}. Error: {e}")
         await message.answer("Please enter a valid number (e.g., 0.123).")
+
 
 
 @router.message(lambda msg: msg.text == "Confirm and send transaction", StateFilter(BuyState.waiting_for_confirmation))
@@ -230,7 +257,7 @@ async def confirm_transaction(message: Message, state: FSMContext):
         await message.answer(
             "✅ Your transaction has been successfully sent!\n\n"
             f"🔹 Token Address: `{token_address}`\n"
-            f"🔹 Amount: {sol_amount:.5f} SOL\n\n"
+            f"🔹 Amount: {sol_amount} SOL\n\n"
             "You can check the status of your transaction in your wallet.",
             parse_mode="Markdown"
         )
