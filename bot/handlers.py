@@ -6,7 +6,8 @@ from bot.utils import fetch_token_decimals
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import StateFilter
-from bot.states import BuyState
+from bot.utils import get_token_balance_lamports, get_token_price_from_coingecko
+from bot.states import BuyState, SellState
 from bot.transaction import TransactionManager
 
 router = Router()
@@ -30,6 +31,7 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="💰 Balance")],
             [KeyboardButton(text="Create private key")],
             [KeyboardButton(text="Buy")],
+            [KeyboardButton(text="Sell")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -138,6 +140,10 @@ async def start_buy_process(message: Message, state: FSMContext):
 @router.message(lambda msg: msg.text == "Back", StateFilter(BuyState.waiting_for_token_address))
 @router.message(lambda msg: msg.text == "Back", StateFilter(BuyState.waiting_for_sol_amount))
 @router.message(lambda msg: msg.text == "Back", StateFilter(BuyState.waiting_for_confirmation))  # Добавлено!
+
+@router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_token_address))
+@router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_token_amount))
+@router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_confirmation))
 async def back_to_main_menu(message: Message, state: FSMContext):
     current_state = await state.get_state()
     logger.info(f"[DEBUG] User {message.from_user.id} pressed 'Back'. Current state: {current_state}")
@@ -253,5 +259,138 @@ async def confirm_transaction(message: Message, state: FSMContext):
 
     except Exception as e:
         logger.error(f"Unexpected error in confirm_transaction: {e}")
+        await message.answer("An unexpected error occurred. Please try again later.")
+        await state.clear()
+
+
+# ----------------- Menu: SELL -----------------
+def sell_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Back")]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+@router.message(lambda msg: msg.text == "Sell")
+async def start_sell_process(message: Message, state: FSMContext):
+    await message.answer("Please enter the token address you want to sell or click 'Back' to return.", reply_markup=sell_menu())
+    await state.set_state(SellState.waiting_for_token_address)
+
+# @router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_token_address))
+# @router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_token_amount))
+# @router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_confirmation))
+# async def back_to_main_menu(message: Message, state: FSMContext):
+#     current_state = await state.get_state()
+#     logger.info(f"[DEBUG] User {message.from_user.id} pressed 'Back'. Current state: {current_state}")
+#     await state.clear()
+#     await message.answer("You are back to the main menu.", reply_markup=main_menu())
+
+@router.message(StateFilter(SellState.waiting_for_token_address))
+async def handle_token_address_for_sell(message: Message, state: FSMContext):
+    token_address = message.text.strip()
+    if len(token_address) != 44:
+        await message.answer("Invalid token address. Please enter a valid address.")
+        return
+    await state.update_data(token_address=token_address)
+    await message.answer(
+        "Token address saved. Now enter the amount you want to sell (as a percentage of your balance 1 to 100) or click 'Back' to change the address.",
+        reply_markup=sell_menu(),
+    )
+    await state.set_state(SellState.waiting_for_token_amount)
+
+@router.message(StateFilter(SellState.waiting_for_token_amount))
+async def handle_token_amount_for_sell(message: Message, state: FSMContext):
+    try:
+        percentage_text = message.text.strip()
+        percentage = int(percentage_text)
+        await state.update_data(percentage=percentage)
+
+        if not (1 <= percentage <= 100):
+            await message.answer("Percentage must be between 1 and 100. Please try again.")
+            return
+
+        data = await state.get_data()
+        token_address = data.get("token_address")
+        token_balance = get_token_balance_lamports(user_id=message.from_user.id, token_address=token_address)
+        if token_balance == 0:
+            await message.answer("No token balance. Nothing to sell.")
+            return
+
+        sell_amount = int(token_balance * (percentage / 100))
+        await state.update_data(sell_amount=sell_amount, percentage=percentage)
+        user_data = get_user_data(message.from_user.id)
+
+        output_amount_out = TransactionManager.get_quote(
+            input_mint=token_address,
+            output_mint='So11111111111111111111111111111111111111112',
+            amount=token_balance,
+            pub_key_str=user_data['solana_wallet_address']
+        )
+        if not output_amount_out:
+            await message.answer("Failed to fetch a quote. Please try again later.")
+            return
+        output_amount = int(output_amount_out["outAmount"]) / (10**9)
+        await state.update_data(output_amount=output_amount)
+        await state.update_data(token_balance=token_balance)
+
+        await message.answer(
+            text=f"You want to sell {percentage}% of your tokens.\n"
+            f"Token amount: {(token_balance / (10 ** int(fetch_token_decimals(token_address)))) * (percentage/100)}\n"
+            f"Token Address: `{token_address}`\n"
+            f"Approximate SOL result: {output_amount}\n\n"
+            "Click 'Back' to change the amount or 'Confirm' to proceed.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="Back")], [KeyboardButton(text="Confirm and send transaction")]],
+                resize_keyboard=True,
+                one_time_keyboard=False,
+            ),
+            parse_mode="Markdown",
+        )
+        await state.set_state(SellState.waiting_for_confirmation)
+
+    except ValueError:
+        await message.answer("Please enter a valid percentage (1-100).")
+
+@router.message(lambda msg: msg.text == "Confirm and send transaction", StateFilter(SellState.waiting_for_confirmation))
+async def confirm_sell_transaction(message: Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        token_address = data.get("token_address")
+        sell_amount = data.get("sell_amount")
+        percentage = data.get('percentage')
+        token_balance  = data.get('token_balance')
+        output_amount = data.get('output_amount')
+
+        if not token_address or sell_amount is None:
+            await message.answer("Transaction data is incomplete. Please start again.")
+            await state.clear()
+            await message.answer("You are back to the main menu.", reply_markup=main_menu())
+            return
+
+        await message.answer("Try to send transaction wait... (90 sec basic)")
+
+        success, tx_hash = TransactionManager.sell(
+            user_id=message.from_user.id,
+            token_address=token_address,
+            percentage=percentage,  # Always 100% as we already calculate sell_amount
+        )
+
+        if success:
+            await message.answer(
+                f"✅ Your transaction has been successfully sent!\n\n"
+                f"🔹 Token Address: `{token_address}`\n"
+                f"🔹 Amount: {(token_balance / (10 ** int(fetch_token_decimals(token_address)))) * (percentage/100)}\n\n"
+                f"🔹 Get SOL: {output_amount}\n\n"
+                f"https://solana.fm/tx/{tx_hash}",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer("❌ Transaction failed. Please try again later.")
+
+        await state.clear()
+        await message.answer("You are back to the main menu.", reply_markup=main_menu())
+
+    except Exception as e:
+        logger.error(f"Unexpected error in confirm_sell_transaction: {e}")
         await message.answer("An unexpected error occurred. Please try again later.")
         await state.clear()
