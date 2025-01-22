@@ -292,8 +292,15 @@ async def handle_token_address_for_sell(message: Message, state: FSMContext):
         await message.answer("Invalid token address. Please enter a valid address.")
         return
     await state.update_data(token_address=token_address)
+    token_balance = get_token_balance_lamports(user_id=message.from_user.id, token_address=token_address)
+    if not token_balance:
+        await message.answer(text=f"NO tokens for this address: `{token_address}` !",
+                             parse_mode="Markdown")
+        return
+    await message.answer(text=f"Find {token_balance / (10 ** int(fetch_token_decimals(token_address)))} Tokens",
+                         parse_mode="Markdown")
     await message.answer(
-        "Token address saved. Now enter the amount you want to sell (as a percentage of your balance 1 to 100) or click 'Back' to change the address.",
+        text="Token address saved. Now enter the amount you want to sell (as a percentage of your balance 1 to 100) or click 'Back' to change the address.",
         reply_markup=sell_menu(),
     )
     await state.set_state(SellState.waiting_for_token_amount)
@@ -323,7 +330,7 @@ async def handle_token_amount_for_sell(message: Message, state: FSMContext):
         output_amount_out = TransactionManager.get_quote(
             input_mint=token_address,
             output_mint='So11111111111111111111111111111111111111112',
-            amount=token_balance,
+            amount=sell_amount,
             pub_key_str=user_data['solana_wallet_address']
         )
         if not output_amount_out:
