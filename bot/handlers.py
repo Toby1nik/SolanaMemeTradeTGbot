@@ -174,17 +174,19 @@ async def handle_sol_amount(message: Message, state: FSMContext):
         data = await state.get_data()
         token_address = data.get("token_address")
 
+        user_data = get_user_data(message.from_user.id)
         estimated_amount = TransactionManager.get_quote(
             input_mint="So11111111111111111111111111111111111111112",
             output_mint=token_address,
             amount=int(sol_amount * 1e9),
-            slippage_bps=500,
+            pub_key_str=user_data['solana_wallet_address']
         )
 
         if not estimated_amount:
             await message.answer("Failed to fetch a quote. Please try again later.")
             return
 
+        await state.update_data(token_out_amount=int(estimated_amount["outAmount"]))
         output_amount = int(estimated_amount["outAmount"]) / (10 ** int(fetch_token_decimals(token_address)))
 
         await message.answer(
@@ -210,6 +212,7 @@ async def confirm_transaction(message: Message, state: FSMContext):
         data = await state.get_data()
         token_address = data.get("token_address")
         sol_amount = data.get("sol_amount")
+        amount_out_token = data.get('token_out_amount')
 
         if not token_address or sol_amount is None:
             await message.answer("Transaction data is incomplete. Please start again.")
@@ -217,18 +220,19 @@ async def confirm_transaction(message: Message, state: FSMContext):
             await message.answer("You are back to the main menu.", reply_markup=main_menu())
             return
 
-        success = TransactionManager.buy(
+        success, tx_hash = TransactionManager.buy(
             user_id=message.from_user.id,
             token_address=token_address,
             sol_amount=sol_amount,
         )
+        await message.answer("Try to send transaction wait... (90 sec basic)")
 
         if success:
             await message.answer(
                 "✅ Your transaction has been successfully sent!\n\n"
                 f"🔹 Token Address: `{token_address}`\n"
-                f"🔹 Amount: {sol_amount} SOL\n\n"
-                "You can check the status of your transaction in your wallet.",
+                f"🔹 Amount: {sol_amount} SOL to token {amount_out_token / (10 ** int(fetch_token_decimals(token_address)))}\n\n"
+                f"https://solana.fm/tx/{tx_hash}",
                 parse_mode="Markdown"
             )
         else:
