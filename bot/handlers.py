@@ -137,8 +137,15 @@ async def start_buy_process(message: Message, state: FSMContext):
 
 @router.message(lambda msg: msg.text == "Back", StateFilter(BuyState.waiting_for_token_address))
 @router.message(lambda msg: msg.text == "Back", StateFilter(BuyState.waiting_for_sol_amount))
+@router.message(lambda msg: msg.text == "Back", StateFilter(BuyState.waiting_for_confirmation))  # Добавлено!
 async def back_to_main_menu(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    logger.info(f"[DEBUG] User {message.from_user.id} pressed 'Back'. Current state: {current_state}")
+    # print(f"[DEBUG] User {message.from_user.id} pressed 'Back'. Current state: {current_state}")
+
     await state.clear()
+    logger.info(f"[DEBUG] State cleared for user {message.from_user.id}.")
+    # print(f"[DEBUG] State cleared for user {message.from_user.id}.")
     await message.answer("You are back to the main menu.", reply_markup=main_menu())
 
 @router.message(StateFilter(BuyState.waiting_for_token_address))
@@ -208,6 +215,8 @@ async def handle_sol_amount(message: Message, state: FSMContext):
 
 @router.message(lambda msg: msg.text == "Confirm and send transaction", StateFilter(BuyState.waiting_for_confirmation))
 async def confirm_transaction(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    logger.info(f"[DEBUG] Current state before confirmation: {current_state}")
     try:
         data = await state.get_data()
         token_address = data.get("token_address")
@@ -220,12 +229,13 @@ async def confirm_transaction(message: Message, state: FSMContext):
             await message.answer("You are back to the main menu.", reply_markup=main_menu())
             return
 
+        await message.answer("Try to send transaction wait... (90 sec basic)")
+
         success, tx_hash = TransactionManager.buy(
             user_id=message.from_user.id,
             token_address=token_address,
             sol_amount=sol_amount,
         )
-        await message.answer("Try to send transaction wait... (90 sec basic)")
 
         if success:
             await message.answer(
