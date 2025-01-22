@@ -6,7 +6,7 @@ from bot.utils import fetch_token_decimals
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import StateFilter
-from bot.utils import get_token_balance_lamports, get_token_price_from_coingecko
+from bot.utils import get_token_balance_lamports, get_sol_balance
 from bot.states import BuyState, SellState
 from bot.transaction import TransactionManager
 
@@ -161,6 +161,13 @@ async def handle_token_address(message: Message, state: FSMContext):
         await message.answer("Invalid token address. Please enter a valid address.")
         return
     await state.update_data(token_address=token_address)
+    token_balance = get_token_balance_lamports(user_id=message.from_user.id, token_address=token_address)
+    if not token_balance:
+        await message.answer(text=f"You don't have this tokens on your account!",
+                             parse_mode="Markdown")
+    else:
+        await message.answer(text=f"Find {token_balance / (10 ** int(fetch_token_decimals(token_address)))} Tokens",
+                             parse_mode="Markdown")
     await message.answer(
         "Token address saved. Now enter the SOL amount you want to sell or click 'Back' to change the address.",
         reply_markup=buy_menu(),
@@ -183,6 +190,10 @@ async def handle_sol_amount(message: Message, state: FSMContext):
             await message.answer("Amount must be positive.")
             return
 
+        sol_balance: int = get_sol_balance(message.from_user.id)
+        if sol_amount > (sol_balance / 10**9):
+            await message.answer(f"Your SOL balance [{sol_amount}] less than [{sol_balance / 10**9}] what you want swap")
+            return
         await state.update_data(sol_amount=sol_amount)
         data = await state.get_data()
         token_address = data.get("token_address")
@@ -276,14 +287,6 @@ async def start_sell_process(message: Message, state: FSMContext):
     await message.answer("Please enter the token address you want to sell or click 'Back' to return.", reply_markup=sell_menu())
     await state.set_state(SellState.waiting_for_token_address)
 
-# @router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_token_address))
-# @router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_token_amount))
-# @router.message(lambda msg: msg.text == "Back", StateFilter(SellState.waiting_for_confirmation))
-# async def back_to_main_menu(message: Message, state: FSMContext):
-#     current_state = await state.get_state()
-#     logger.info(f"[DEBUG] User {message.from_user.id} pressed 'Back'. Current state: {current_state}")
-#     await state.clear()
-#     await message.answer("You are back to the main menu.", reply_markup=main_menu())
 
 @router.message(StateFilter(SellState.waiting_for_token_address))
 async def handle_token_address_for_sell(message: Message, state: FSMContext):
@@ -294,7 +297,7 @@ async def handle_token_address_for_sell(message: Message, state: FSMContext):
     await state.update_data(token_address=token_address)
     token_balance = get_token_balance_lamports(user_id=message.from_user.id, token_address=token_address)
     if not token_balance:
-        await message.answer(text=f"NO tokens for this address: `{token_address}` !",
+        await message.answer(text=f"You don't have this tokens on your account!",
                              parse_mode="Markdown")
         return
     await message.answer(text=f"Find {token_balance / (10 ** int(fetch_token_decimals(token_address)))} Tokens",

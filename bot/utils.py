@@ -1,6 +1,7 @@
 from solders.pubkey import Pubkey
 from bot.wallet_manager import get_solana_client, get_user_data
 from solders.token.associated import get_associated_token_address
+from solders.rpc.errors import InvalidParamsMessage
 from loguru import logger
 import requests
 import json
@@ -34,15 +35,19 @@ def get_token_balance_lamports(user_id: int, token_address: str) -> int:
     pub_key_str = user_data["solana_wallet_address"]
 
     client = get_solana_client()
-    associated_token = get_associated_token_address(
-        wallet_address=Pubkey.from_string(pub_key_str),
-        token_mint_address=Pubkey.from_string(token_address),
-    )
     try:
+        token_program_id = (client.get_account_info(Pubkey.from_string(token_address))).value.owner
+        associated_token = get_associated_token_address(
+            wallet_address=Pubkey.from_string(pub_key_str),
+            token_mint_address=Pubkey.from_string(token_address),
+            token_program_id=token_program_id
+        )
         response = client.get_token_account_balance(associated_token)
+        if isinstance(response, InvalidParamsMessage):
+            return 0
         return int(response.value.amount)
     except Exception as e:
-        print(f"Error getting token balance: {e}")
+        print(f"Unknown error check fun get_token_balance_lamports : {e}")
         return 0
 
 
@@ -81,3 +86,9 @@ def get_token_price_from_coingecko(token: str) -> float:
 
     except Exception as e:
         raise RuntimeError(f"Error fetching token price: {str(e)}") from e
+
+
+def get_sol_balance(user_id: int) -> int:
+    user_data = get_user_data(user_id)
+    client = get_solana_client()
+    return (client.get_account_info(Pubkey.from_string(user_data["solana_wallet_address"]))).value.lamports
